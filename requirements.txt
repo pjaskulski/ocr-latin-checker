@@ -1,0 +1,5 @@
+flask>=3.0.0
+openai>=1.0.0
+python-dotenv
+spylls>=0.1.0
+cltk>=1.0.0

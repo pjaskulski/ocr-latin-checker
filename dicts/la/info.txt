@@ -1,0 +1,1 @@
+Folder for Latin dictionary for the Hunspell library (la aff and la.dic files, e.g., from LibreOffice).
