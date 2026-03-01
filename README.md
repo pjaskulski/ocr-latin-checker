@@ -4,6 +4,8 @@ The application is used for automatic analysis and verification of Latin texts o
 
 The main task of the tool is to indicate potential reading errors, such as character confusion (e.g., ‘v’ instead of ‘u’), segmentation errors (merged or incorrectly separated words), and typos.
 
+![screeenshot](docs/img/tester_laciny_gpt.png)
+
 ## ---
 
 **How does the application work?**
