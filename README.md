@@ -1,4 +1,4 @@
-# **Latin OCR/HTR Tester**
+# **Latin OCR/HTR Checker**
 
 The application is used for automatic analysis and verification of Latin texts originating from **OCR (Optical Character Recognition)** or **HTR (Handwritten Text Recognition)** processes. It is optimized for historical documents and attempts to take into account specific spelling and abbreviations.
 
