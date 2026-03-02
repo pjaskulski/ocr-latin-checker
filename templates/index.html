@@ -224,7 +224,7 @@
     <p class="error">{{ error }}</p>
     {% endif %}
 
-    <form method="post" action="/analyze" id="analyzeForm">
+    <form method="post" action="analyze" id="analyzeForm">
       <div class="card">
         <div class="controls">
           <label class="muted">Tryb analizy:</label>
@@ -234,7 +234,7 @@
           </select>
 
           <button type="submit" class="btn-primary" id="submitBtn">Analizuj tekst</button>
-          <a href="/" class="btn-clear">Wyczyść</a>
+          <a href="/ocrlatcheck/" class="btn-clear">Wyczyść</a>
 
           <div id="loaderContainer" class="hidden">
             <div class="loader"></div>
