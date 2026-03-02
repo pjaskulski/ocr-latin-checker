@@ -5,12 +5,12 @@ import json
 import html
 import time
 from pathlib import Path
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import Any, Dict, List, Optional, Tuple
 
 from itertools import islice
 from dotenv import load_dotenv
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, Response
 from markupsafe import Markup
 from openai import OpenAI
 
@@ -22,6 +22,9 @@ env_path = Path(".") / ".env"
 load_dotenv(dotenv_path=env_path)
 OPENAI_ORG_ID = os.environ.get('OPENAI_ORG_ID')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+
+APP_PASSWORD = os.environ.get('APP_PASSWORD')
+APP_USER = os.environ.get('APP_USER')
 
 DEFAULT_ENGINE = os.getenv("DEFAULT_ENGINE", "local")  # local | llm
 DEFAULT_MODEL_LLM = os.getenv("OPENAI_MODEL", "gpt-5-mini")
@@ -94,6 +97,27 @@ CONFUSION_MAP = [
 
 
 # -------------------------------- FUNCTIONS ----------------------------------
+def check_auth(username, password):
+    """Sprawdza, czy nazwa użytkownika i hasło są poprawne."""
+    return username == APP_USER and password == APP_PASSWORD
+
+def authenticate():
+    """Wysyła odpowiedź 401, która wyzwala okno logowania w przeglądarce."""
+    return Response(
+        'Proszę się zalogować.\n'
+        'Dostęp tylko dla pracowników IH PAN.', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
 def get_hunspell_dict():
     """ inicjalizacja słownika Hunspell."""
     global _HUNSPELL_DICT
@@ -565,6 +589,7 @@ def highlight_html(text: str, issues: List[Dict[str, Any]]) -> Markup:
 
 # Routes
 @app.route("/", methods=["GET"])
+@requires_auth
 def index():
     return render_template(
         "index.html",
@@ -574,6 +599,7 @@ def index():
 
 
 @app.route("/analyze", methods=["POST"])
+@requires_auth
 def analyze():
     text = request.form.get("text", "")
 
