@@ -269,12 +269,17 @@ def is_probable_abbrev(text: str, start: int, end: int, token: str) -> bool:
     """
     Heurystyka: skrót w rodzaju 'V.' / 'D.' / 'Des.' itd.
     Uznajemy za skrót, jeśli:
-      - token jest krótki (<=3) i zaczyna się wielką literą
-      - bezpośrednio po tokenie stoi kropka
+      - token jest krótki (<=3)
+      - po tokenie stoi kropka albo środkowa kropka, ewentualnie po odstępach
     """
-    if len(token) <= 3 and token[:1].isupper():
-        return end < len(text) and text[end] == "."
-    return False
+    if len(token) > 3:
+        return False
+
+    pos = end
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+
+    return pos < len(text) and text[pos] in {".", "·"}
 
 
 def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -571,10 +576,28 @@ def sanitize_and_sort_issues(text: str, issues: List[Dict[str, Any]]) -> List[Di
     search_cursor = 0
 
     for it in issues:
-        excerpt = it.get("excerpt", "").strip()
+        excerpt = str(it.get("excerpt", ""))
         if not excerpt:
             continue
-            
+
+        start = it.get("start")
+        end = it.get("end")
+        if (
+            isinstance(start, int)
+            and isinstance(end, int)
+            and 0 <= start < end <= len(text)
+            and text[start:end] == excerpt
+        ):
+            if "suggestion" not in it:
+                it["suggestion"] = ""
+            clean.append(it)
+            search_cursor = max(search_cursor, end)
+            continue
+
+        excerpt = excerpt.strip()
+        if not excerpt:
+            continue
+
         # szukanie fragmentu w tekście, zaczynając od ostatniego znalezionego miejsca
         found_pos = text.find(excerpt, search_cursor)
         
