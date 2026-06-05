@@ -213,6 +213,15 @@
       border-radius: 4px;
       border: 1px solid #f5c6cb;
     }
+
+    .warning {
+      color: #7a5a00;
+      background: #fff3cd;
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid #ffe08a;
+      font-family: sans-serif;
+    }
   </style>
 </head>
 
@@ -224,7 +233,13 @@
     <p class="error">{{ error }}</p>
     {% endif %}
 
-    <form method="post" action="analyze" id="analyzeForm">
+    {% if warnings %}
+    {% for warning in warnings %}
+    <p class="warning">{{ warning }}</p>
+    {% endfor %}
+    {% endif %}
+
+    <form method="post" action="{{ url_for('analyze') }}" id="analyzeForm">
       <div class="card">
         <div class="controls">
           <label class="muted">Tryb analizy:</label>
@@ -234,7 +249,7 @@
           </select>
 
           <button type="submit" class="btn-primary" id="submitBtn">Analizuj tekst</button>
-          <a href="/ocrlatcheck/" class="btn-clear">Wyczyść</a>
+          <a href="{{ url_for('index') }}" class="btn-clear">Wyczyść</a>
 
           <div id="loaderContainer" class="hidden">
             <div class="loader"></div>

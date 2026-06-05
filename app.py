@@ -39,7 +39,6 @@ LOCAL_MAX_TOKEN_FOR_SUGGEST = 25 # nie licz sugestii dla bardzo długich tokenó
 LOCAL_SUGGEST_K = 3              # ile sugestii pobierać
 
 _HUNSPELL_DICT = None
-_LATIN_LEMMATIZER = None
 
 # ścieżka bazowa do słownika Hunspell (bez .aff/.dic)
 HUNSPELL_BASE = os.getenv("HUNSPELL_BASE", os.path.join("dicts", "la", "la"))
@@ -131,14 +130,6 @@ def get_hunspell_dict():
         _HUNSPELL_DICT = Dictionary.from_files(HUNSPELL_BASE)
     return _HUNSPELL_DICT
 
-def get_latin_lemmatizer():
-    """ inicjalizacja lematyzatora CLTK """
-    global _LATIN_LEMMATIZER
-    if _LATIN_LEMMATIZER is None:
-        from cltk.lemmatize.lat import LatinBackoffLemmatizer
-        _LATIN_LEMMATIZER = LatinBackoffLemmatizer()
-    return _LATIN_LEMMATIZER
-
 def check_confusion_variants(token: str) -> Optional[str]:
     """próbuje podmienić znaki według matrycy i sprawdza w słowniku."""
     D = get_hunspell_dict()
@@ -154,15 +145,6 @@ def hunspell_suggest_cached(base: str, max_n: int) -> Tuple[str, ...]:
     D = get_hunspell_dict()
     return tuple(islice(D.suggest(base), max_n))
 
-def lemmatize_token(token_lower: str) -> Optional[str]:
-    """ lematyzacja """
-    try:
-        lem = get_latin_lemmatizer()
-        res = lem.lemmatize([token_lower])
-        return res[0][1] if res else None
-    except Exception:
-        return None
-    
 def edit_distance(a: str, b: str, limit: int = 3) -> int:
     """Levenshtein """
     if a == b:
@@ -247,10 +229,31 @@ def hunspell_lookup(token: str) -> Tuple[bool, str]:
 @lru_cache(maxsize=1)
 def load_latin_lemmatizer():
     """
-    CLTK v1+: LatinBackoffLemmatizer
+    CLTK v2+: pipeline NLP oparty domyślnie o Stanza.
     """
-    from cltk.lemmatize.lat import LatinBackoffLemmatizer
-    return LatinBackoffLemmatizer()
+    from cltk.nlp import NLP
+    return NLP(language_code="lat", suppress_banner=True)
+
+
+def lemmatize_tokens(token_lowers: List[str]) -> Dict[str, str]:
+    """
+    Lematyzuje unikalne tokeny jedną analizą CLTK/Stanza.
+    Zwraca mapowanie token_lower -> lemma.
+    """
+    unique_tokens = list(dict.fromkeys(t for t in token_lowers if t))
+    if not unique_tokens:
+        return {}
+
+    nlp = load_latin_lemmatizer()
+    doc = nlp.analyze(text=" ".join(unique_tokens))
+
+    lemmas: Dict[str, str] = {}
+    for word in getattr(doc, "words", []) or []:
+        form = getattr(word, "string", None)
+        lemma = getattr(word, "lemma", None)
+        if isinstance(form, str) and isinstance(lemma, str) and lemma:
+            lemmas[form.lower()] = lemma.lower()
+    return lemmas
 
 
 def hunspell_suggest(token: str, max_n: int = 5) -> List[str]:
@@ -272,10 +275,6 @@ def is_probable_abbrev(text: str, start: int, end: int, token: str) -> bool:
     if len(token) <= 3 and token[:1].isupper():
         return end < len(text) and text[end] == "."
     return False
-
-
-def downgrade(sev: str) -> str:
-    return {"high": "medium", "medium": "low", "low": "low"}.get(sev, "low")
 
 
 def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -311,9 +310,10 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
 
     issues: List[Dict[str, Any]] = []
     tokens: List[Tuple[int, int, str, bool]] = []  # (start,end,token,ok)
+    token_records: List[Dict[str, Any]] = []
+    tokens_for_lemmatization: List[str] = []
 
     suggest_count = 0
-    print('Początek analizy....')
 
     # detekcja znaków „śmieciowych” (częste w OCR): U+FFFD itp.
     for i, ch in enumerate(text):
@@ -332,7 +332,6 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
 
     # tokenizacja + hunspell
     for m in WORD_RE.finditer(text):
-        print(m)
         start, end = m.start(), m.end()
         token = m.group(0)
         token_lower = token.lower()
@@ -343,6 +342,41 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         ok, ok_variant = (True, token_lower) if abbrev else hunspell_lookup_cached(token)
 
         tokens.append((start, end, token, ok))
+        token_records.append(
+            {
+                "start": start,
+                "end": end,
+                "token": token,
+                "token_lower": token_lower,
+                "abbrev": abbrev,
+                "ok": ok,
+            }
+        )
+
+        if not ok and cltk_ok:
+            tokens_for_lemmatization.append(token_lower)
+
+    lemma_map: Dict[str, str] = {}
+    if cltk_ok and tokens_for_lemmatization:
+        try:
+            lemma_map = lemmatize_tokens(tokens_for_lemmatization)
+        except Exception as e:
+            cltk_ok = False
+            warnings.append(
+                "CLTK/Stanza nie wykonał lematyzacji; analiza lokalna "
+                "będzie kontynuowana bez lematów. Szczegóły: "
+                f"{e}"
+            )
+
+    lemma_resolved_spans = set()
+
+    for record in token_records:
+        start = record["start"]
+        end = record["end"]
+        token = record["token"]
+        token_lower = record["token_lower"]
+        abbrev = record["abbrev"]
+        ok = record["ok"]
 
         if ok:
             continue
@@ -362,6 +396,23 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
             )
             continue
 
+        suggestion = ""
+        reason_parts: List[str] = []
+
+        lemma = lemma_map.get(token_lower) if cltk_ok else None
+        lemma_ok = False
+
+        if lemma:
+            lemma_ok, _ = hunspell_lookup_cached(lemma)
+
+            if lemma_ok:
+                if lemma != token_lower:
+                    lemma_resolved_spans.add((start, end))
+                    continue
+                reason_parts.append(f"Lematyzacja sugeruje lemma: {lemma}.")
+            else:
+                reason_parts.append(f"Lematyzacja sugeruje lemma: {lemma} (nieznane słownikowo).")
+
         # zamiany znaków
         confusion_fix = check_confusion_variants(token)
         if confusion_fix:
@@ -372,23 +423,9 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 "severity": "high",
                 "category": "glyph_confusion",
                 "suggestion": confusion_fix,
-                "reason": f"Prawdopodobna pomyłka znaków (typowa dla OCR/HTR)."
+                "reason": "Prawdopodobna pomyłka znaków (typowa dla OCR/HTR)."
             })
             continue
-        
-        suggestion = ""
-        reason_parts: List[str] = []
-
-        lemma = lemmatize_token(token_lower) if cltk_ok else None
-
-        if lemma:
-            # jeśli lemma jest rozpoznawalna słownikowo, zmniejszenie podejrzenie
-            lemma_ok, _ = hunspell_lookup_cached(lemma)
-            
-            if lemma_ok:
-                reason_parts.append(f"Lematyzacja sugeruje lemma: {lemma}.")
-            else:
-                reason_parts.append(f"Lematyzacja sugeruje lemma: {lemma} (nieznane słownikowo).")
 
         # w pętli tokenów:
         suggs = []
@@ -398,7 +435,6 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 suggest_count += 1
 
         if suggs:
-            print(f'Znaleziono sugestie: {len(suggs)}')
             suggestion = suggs[0]
             d = edit_distance(token_lower, suggestion.lower(), limit=3)
             reason_parts.append(f"Nie znaleziono w słowniku; sugestia: {suggestion} (odległość≈{d}).")
@@ -433,10 +469,6 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
                 category = "lexical"
                 reason_parts.append("Nie znaleziono w słowniku i brak sugestii Hunspell.")
 
-        # jeśli lemma wygląda sensownie, obniżenie wagi błędu o jeden poziom
-        if lemma and ("lemma" in " ".join(reason_parts).lower()):
-            severity = downgrade(severity)
-
         issues.append(
             {
                 "start": start,
@@ -456,7 +488,12 @@ def local_analyze(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         s1, e1, t1, ok1 = tokens[i]
         s2, e2, t2, ok2 = tokens[i + 1]
 
-        if ok1 or ok2:
+        if (
+            ok1
+            or ok2
+            or (s1, e1) in lemma_resolved_spans
+            or (s2, e2) in lemma_resolved_spans
+        ):
             continue
 
         between = text[e1:s2]
